@@ -1,15 +1,13 @@
 /**
  * Created by Tanya on 09.04.2016.
  */
-// Dependencies
+// 5 Dependencies
 var http = require('http'),
     fs = require('fs');
 
-// Cache
-var cache = {};
-
-//file with data
-fname = '.\\person.json';
+//6 configuration
+port = 80;
+fname = '.\\person.json'; //file a-la "database"
 
 //1 read file
 function rf() {
@@ -26,7 +24,7 @@ function wf(data) {
 }
 
 //2 deserialize, execute with func and serialize data
-function execute(string, func){
+function execute(string, func) {
     var obj = JSON.parse(string);
     var new_obj = func(obj);
     return JSON.stringify(new_obj);
@@ -49,6 +47,11 @@ function log(req) {
     console.log([date, req.method, req.url].join('  '));
 }
 
+//3.3 data concatenation
+function concat(data) {
+    return Buffer.concat(data).toString();
+}
+
 //3.2 work with cookies
 function parseCookies(cookie) {
     var cookies = {};
@@ -59,43 +62,63 @@ function parseCookies(cookie) {
     return cookies;
 }
 
-//3.5 HTTP response
-function HTTPreply(res, head, data, errorText) {
-    res.writeHead(head);
+function createCookie(text, type) {
+    return {'Set-Cookie': text, 'Content-Type': type };
+}
+
+function HTTPresponce(res, head, head_options, write_mes, data, errorText) {
+    res.writeHead(head, head_options);
+    if (write_mes) {
+        res.write(write_mes)
+    }
+    ;
     res.end((head === 200) ? data : errorText);
 }
 
-/*var routing = {
-    '/': {'GET': function(req, res) {
-        res.writeHead(200, {
-            'Set-Cookie': 'mycookie=test',
-            'Content-Type': 'text/html'
-        });
-        var ip = req.connection.remoteAddress;
-        res.write('<h1>Welcome</h1>Your IP: ' + ip);
-        res.end('<pre>' + JSON.stringify(cookies) + '</pre>');
-    }},
-    '/person': {
-        'GET': function(req, res, data) {
-            var head = data ? 200 : 500;
-            HTTPreply(res, head, data, 'Read error');
-        },
-        'POST': function(req, res) {
-            var body = [];
-            req.on('data', function(chunk) {
-                body.push(chunk);
-            }).on('end', function() {
-                var data = Buffer.concat(body).toString();
-                data = execute(data, transformPersonObj);
+// 3.1 http responce wrapper for cashing
+var cache = {};
+function res_wrapper(req, res, head, head_options, write_mes, data, errorText) {
+    if (data) {
+        cache[req.url] = data;
+        HTTPresponce(res, head, head_options, write_mes, data, errorText);
+    }
+}
 
-                cache[req.url] = data;
-                var head = writeFile(data) ? 200 : 500;
-                HTTPreply(res, head, 'File saved', 'Write error');
+//3.5
+var routing = {
+    '/': {
+        'GET': function (req) {
+            var ip = req.connection.remoteAddress;
+            opts = createCookie('mycookie=test', 'text/html');
+            message1 = '<h1>Welcome</h1>Your IP: ' + ip;
+            message2 = '<pre>' + JSON.stringify(cookies) + '</pre>';
+
+            return [200, opts, message1, message2, ''];
+        }},
+    '/person': {
+        'GET': function(req) {
+            var data = execute(rf(), transformPersonObj);
+            var head = data ? 200 : 500;
+            return [head, null, null, data, 'Read error'];
+
+        },
+        'POST': function(req) {
+            // Receiving POST data
+            var body = [], data, head, flag;
+            req.on('data', function (chunk) {
+                body.push(chunk);
             });
+
+            req.on('end', function () {
+                data = execute(concat(body), transformPersonObj);
+                head = wf(data) ? 200 : 500;
+                flag = true;
+            });
+
+            if (flag) { return [head, null, null, 'File saved', 'Write error']}
         }
-        }
-    };
-    */
+    }
+};
 
 //3 HTTP Server
 http.createServer(function (req, res) {
@@ -106,45 +129,10 @@ http.createServer(function (req, res) {
 
     // Serve from cache
     if (cache[req.url] && req.method === 'GET') {
-        res.writeHead(200);
-        res.end(cache[req.url]);
-    } else {
-
-        // Routing
-        if (req.url === '/' && req.method === 'GET') {
-            res.writeHead(200, {
-                'Set-Cookie': 'mycookie=test',
-                'Content-Type': 'text/html'
-            });
-            var ip = req.connection.remoteAddress;
-            res.write('<h1>Welcome</h1>Your IP: ' + ip);
-            res.end('<pre>' + JSON.stringify(cookies) + '</pre>');
-        } else if (req.url === '/person') {
-            if (req.method === 'GET') {
-                var data = execute(rf(), transformPersonObj);
-
-                cache[req.url] = data;
-
-                var head = data ? 200 : 500;
-                HTTPreply(res, head, data, 'Read error');
-            } else if (req.method === 'POST') {
-
-                // Receiving POST data
-                var body = [];
-                req.on('data', function(chunk) {
-                    body.push(chunk);
-                }).on('end', function() {
-                    var data = Buffer.concat(body).toString();
-                    data = execute(data, transformPersonObj);
-
-                    cache[req.url] = data;
-                    var head = writeFile(data) ? 200 : 500;
-                    HTTPreply(res, head, 'File saved', 'Write error');
-                });
-            }
+        res_wrapper(req, res, 200, null, cache[req.url], '');
+    } else if (req.url in routing) {
+        res_wrapper.apply(this, [req, res].concat(routing[req.url][req.method](req)))
         } else {
-            HTTPreply(res, 404, '', 'Path not found');
-        }
+        HTTPresponce(res, 404, null, null, '', 'Path not found');
     }
-
-}).listen(80);
+}).listen(port);
